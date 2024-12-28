@@ -275,15 +275,157 @@ HAVING COUNT(DISTINCT ChuyenNganh) >= (SELECT COUNT(DISTINCT ChuyenNganh) FROM C
 
 -- Trigger:
 --16. Tạo một trigger để tự động cập nhật số lượng dự án của công ty khi thêm hoặc xóa dự án.
-
-
-
+ALTER TABLE CongTy
+ADD SoDuAn INT DEFAULT 0;
+UPDATE CongTy
+SET SoDuAn = (
+    SELECT COUNT(*)
+    FROM DuAn
+    WHERE DuAn.MaCongTy = CongTy.MaCongTy
+);
+GO
+CREATE TRIGGER trg_CapNhatSoDuAnCongTy
+ON DuAn
+AFTER INSERT, DELETE
+AS
+BEGIN
+    UPDATE CongTy
+    SET SoDuAn = SoDuAn + 1
+    FROM CongTy
+    INNER JOIN inserted ON CongTy.MaCongTy = inserted.MaCongTy;
+    UPDATE CongTy
+    SET SoDuAn = SoDuAn - 1
+    FROM CongTy
+    INNER JOIN deleted ON CongTy.MaCongTy = deleted.MaCongTy;
+END;
+INSERT INTO DuAn (MaDuAn, TenDuAn, MaCongTy, NgayBatDau, NgayKetThuc, TrangThai)
+VALUES (6, N'Dự án thử nghiệm Trigger', 1, '2024-01-01', '2024-06-30', N'Đang thực hiện');
+DELETE FROM DuAn WHERE MaDuAn = 6;
+SELECT MaCongTy, TenCongTy, SoDuAn
+FROM CongTy
+WHERE MaCongTy = 1;
 --17. Tạo một trigger để ghi log mỗi khi có sự thay đổi trong bảng ChuyenGia.
-
-
+CREATE TABLE ChuyenGiaLog (
+    LogID INT IDENTITY(1,1) PRIMARY KEY,
+    MaChuyenGia INT,
+    HanhDong NVARCHAR(10),
+    NgayThayDoi DATETIME DEFAULT GETDATE()
+);
+GO
+CREATE TRIGGER trg_LogChuyenGia
+ON ChuyenGia
+AFTER INSERT, UPDATE, DELETE
+AS
+BEGIN
+    DECLARE @HanhDong NVARCHAR(10);
+    
+    IF EXISTS (SELECT * FROM inserted) AND EXISTS (SELECT * FROM deleted)
+        SET @HanhDong = 'UPDATE';
+    ELSE IF EXISTS (SELECT * FROM inserted)
+        SET @HanhDong = 'INSERT';
+    ELSE
+        SET @HanhDong = 'DELETE';
+    
+    INSERT INTO ChuyenGiaLog (MaChuyenGia, HanhDong)
+    SELECT MaChuyenGia, @HanhDong
+    FROM inserted
+    UNION ALL
+    SELECT MaChuyenGia, @HanhDong
+    FROM deleted;
+END;
+INSERT INTO ChuyenGia (MaChuyenGia, HoTen, NgaySinh, GioiTinh, Email, SoDienThoai, ChuyenNganh, NamKinhNghiem)
+VALUES (12, N'Nguyễn Thị Lan', '1995-09-15', N'Nữ', 'lannguyen@email.com', '0909998887', N'AI', 3);
+SELECT * FROM ChuyenGiaLog WHERE MaChuyenGia = 12;
 --18. Tạo một trigger để đảm bảo rằng một chuyên gia không thể tham gia vào quá 5 dự án cùng một lúc.
+GO
+CREATE TRIGGER trg_Check_MaxProjects
+ON ChuyenGia_DuAn
+AFTER INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
 
+    -- Kiểm tra số lượng dự án của từng chuyên gia sau khi thêm mới
+    IF EXISTS (
+        SELECT MaChuyenGia
+        FROM ChuyenGia_DuAn
+        GROUP BY MaChuyenGia
+        HAVING COUNT(*) > 5
+    )
+    BEGIN
+        RAISERROR (N'Một chuyên gia không thể tham gia quá 5 dự án cùng một lúc.', 16, 1);
+        ROLLBACK TRANSACTION;
+    END
+END;
+INSERT INTO ChuyenGia_DuAn (MaChuyenGia, MaDuAn, VaiTro, NgayThamGia)
+VALUES (12, 1, N'Chuyên gia AI', '2024-06-01');
+
+INSERT INTO ChuyenGia_DuAn (MaChuyenGia, MaDuAn, VaiTro, NgayThamGia)
+VALUES (12, 2, N'Chuyên gia AI', '2024-06-02');
+
+INSERT INTO ChuyenGia_DuAn (MaChuyenGia, MaDuAn, VaiTro, NgayThamGia)
+VALUES (12, 3, N'Chuyên gia AI', '2024-06-03');
+
+INSERT INTO ChuyenGia_DuAn (MaChuyenGia, MaDuAn, VaiTro, NgayThamGia)
+VALUES (12, 4, N'Chuyên gia AI', '2024-06-04');
+
+INSERT INTO ChuyenGia_DuAn (MaChuyenGia, MaDuAn, VaiTro, NgayThamGia)
+VALUES (12, 5, N'Chuyên gia AI', '2024-06-05');
+
+INSERT INTO ChuyenGia_DuAn (MaChuyenGia, MaDuAn, VaiTro, NgayThamGia)
+VALUES (12, 6, N'Chuyên gia AI', '2024-06-06');
 --19. Tạo một trigger để tự động cập nhật trạng thái của dự án thành 'Hoàn thành' khi tất cả chuyên gia đã kết thúc công việc.
+GO
+CREATE TRIGGER trg_UpdateTrangThaiDuAn
+ON ChuyenGia_DuAn
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    DECLARE @MaDuAn INT;
 
+    SELECT @MaDuAn = MaDuAn
+    FROM INSERTED;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM ChuyenGia_DuAn
+        WHERE MaDuAn = @MaDuAn
+        AND NgayThamGia < GETDATE() 
+    )
+    BEGIN
+
+        UPDATE DuAn
+        SET TrangThai = 'Hoàn thành'
+        WHERE MaDuAn = @MaDuAn;
+    END
+END;
 
 --20. Tạo một trigger để tự động tính toán và cập nhật điểm đánh giá trung bình của công ty dựa trên điểm đánh giá của các dự án.
+ALTER TABLE CongTy
+ADD DiemDanhGia DECIMAL(3,2);  
+ALTER TABLE DuAn
+ADD DiemDanhGia DECIMAL(3,2); 
+GO
+CREATE TRIGGER trg_CapNhatDiemDanhGiaCongTy
+ON DuAn
+AFTER UPDATE
+AS
+BEGIN
+    IF UPDATE(DiemDanhGia)
+    BEGIN
+        UPDATE CongTy
+        SET DiemDanhGia = (
+            SELECT AVG(DiemDanhGia)
+            FROM DuAn
+            WHERE MaCongTy = CongTy.MaCongTy AND DiemDanhGia IS NOT NULL
+        )
+        FROM CongTy
+        INNER JOIN inserted ON CongTy.MaCongTy = inserted.MaCongTy;
+    END
+END;
+
+UPDATE DuAn
+SET DiemDanhGia = 4.5
+WHERE MaDuAn = 1;
+
+SELECT * FROM CongTy WHERE MaCongTy = 1;
